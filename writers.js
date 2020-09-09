@@ -35,13 +35,42 @@ module.exports = declareInjections(
     }
     async create (session, type, document, softWrite) {
       log.info('creating type=%s', type)
-      if (!document.data) {
-        throw new Error('The document must have a top-level "data" property', {
-          status: 400
+      if (Array.isArray(document)) {
+        const _authorizedDocs = []
+        document.forEach(async doc => {
+          const _doc = await this.handleCreate(
+            false,
+            session,
+            type,
+            doc,
+            undefined,
+            softWrite,
+            true
+          )
+          _authorizedDocs.push(_doc)
         })
+        const schema = await this.currentSchema.getSchema()
+        let { writer } = this._getSchemaDetailsForType(schema, type)
+        await writer.bulkPush()
+        return _authorizedDocs
+      } else {
+        if (!document.data) {
+          throw new Error(
+            'The document must have a top-level "data" property',
+            {
+              status: 400
+            }
+          )
+        }
+        return await this.handleCreate(
+          false,
+          session,
+          type,
+          document,
+          undefined,
+          softWrite
+        )
       }
-
-      return await this.handleCreate(false, session, type, document, softWrite)
     }
 
     async createBinary (session, type, stream) {
@@ -172,7 +201,8 @@ module.exports = declareInjections(
       type,
       documentOrStream,
       schema,
-      softWrite
+      softWrite,
+      isBulk
     ) {
       await this.pgSearchClient.ensureDatabaseSetup()
 
@@ -232,7 +262,7 @@ module.exports = declareInjections(
         if (typeof beforeFinalize === 'function') {
           await beforeFinalize()
         }
-        context = await this._finalize(pending, type, schema, sourceId)
+        context = await this._finalize(pending, type, schema, sourceId, isBulk)
 
         let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
         await batch.saveDocument(context)
@@ -260,8 +290,7 @@ module.exports = declareInjections(
       return authorizedDocument
     }
 
-    async update (session, type, id, document, schema, softWrite) {
-      log.info('updating type=%s id=%s', type, id)
+    async _update (session, type, id, document, schema, softWrite, isBulk) {
       if (!document.data) {
         throw new Error('The document must have a top-level "data" property', {
           status: 400
@@ -310,7 +339,7 @@ module.exports = declareInjections(
         if (typeof beforeFinalize === 'function') {
           await beforeFinalize()
         }
-        context = await this._finalize(pending, type, schema, sourceId)
+        context = await this._finalize(pending, type, schema, sourceId, isBulk)
 
         let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
         await batch.saveDocument(context)
@@ -339,6 +368,31 @@ module.exports = declareInjections(
         )
       }
       return authorizedDocument
+    }
+
+    async update (session, type, id, document, schema, softWrite) {
+      log.info('updating type=%s id=%s', type, id)
+      if (Array.isArray(document)) {
+        const _authorizedDocs = []
+        document.forEach(async doc => {
+          _authorizedDocs.push(
+            await this._update(session, type, id, doc, schema, softWrite, true)
+          )
+        })
+        const _schema = await this.currentSchema.getSchema()
+        let { writer } = this._getSchemaDetailsForType(_schema, type)
+        await writer.bulkPush()
+        return _authorizedDocs
+      } else {
+        return await this._update(
+          session,
+          type,
+          id,
+          document,
+          schema,
+          softWrite
+        )
+      }
     }
 
     async delete (session, version, type, id, schema) {
@@ -430,8 +484,8 @@ module.exports = declareInjections(
       })
     }
 
-    async _finalize (pending, type, schema, sourceId, id) {
-      let meta = await pending.finalize()
+    async _finalize (pending, type, schema, sourceId, id, isBulk) {
+      let meta = await pending.finalize(isBulk)
       let { finalDocumentContext } = pending
 
       if (finalDocumentContext) {
@@ -667,10 +721,11 @@ class PendingChange {
     }
   }
 
-  async finalize () {
+  async finalize (isBulk) {
     let finalizer = this._finalizer
     this._finalizer = null
     this._aborter = null
+    this.isBulk = isBulk
     if (finalizer) {
       return finalizer.call(null, this)
     }
