@@ -35,6 +35,7 @@ module.exports = declareInjections(
     }
     async create (session, type, document, softWrite) {
       log.info('creating type=%s', type)
+      await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
         const _authorizedDocs = []
         document.forEach(async doc => {
@@ -75,6 +76,7 @@ module.exports = declareInjections(
 
     async createBinary (session, type, stream) {
       log.info('creating type=%s from binary stream', type)
+      await this.pgSearchClient.ensureDatabaseSetup()
       if (!stream.read) {
         throw new Error('The passed stream must be a readable binary stream', {
           status: 400
@@ -154,6 +156,7 @@ module.exports = declareInjections(
 
       let beforeFinalize = async () => {
         // This assumes that the session used to update cards also posseses permissions to CRUD schema models and internal card models
+        await this.pgSearchClient.ensureDatabaseSetup()
         for (let resource of addedModels) {
           await this.handleCreate(
             false,
@@ -204,8 +207,6 @@ module.exports = declareInjections(
       softWrite,
       isBulk
     ) {
-      await this.pgSearchClient.ensureDatabaseSetup()
-
       schema = schema || (await this.currentSchema.getSchema())
       let beforeFinalize
       if (type === 'cards') {
@@ -291,12 +292,12 @@ module.exports = declareInjections(
     }
 
     async _update (session, type, id, document, schema, softWrite, isBulk) {
+      log.info('updating type=%s id=%s', type, id)
       if (!document.data) {
         throw new Error('The document must have a top-level "data" property', {
           status: 400
         })
       }
-      await this.pgSearchClient.ensureDatabaseSetup()
       schema = schema || (await this.currentSchema.getSchema())
 
       let beforeFinalize
@@ -371,12 +372,20 @@ module.exports = declareInjections(
     }
 
     async update (session, type, id, document, schema, softWrite) {
-      log.info('updating type=%s id=%s', type, id)
+      await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
         const _authorizedDocs = []
         document.forEach(async doc => {
           _authorizedDocs.push(
-            await this._update(session, type, id, doc, schema, softWrite, true)
+            await this._update(
+              session,
+              type,
+              doc.data.id,
+              doc,
+              schema,
+              softWrite,
+              true
+            )
           )
         })
         const _schema = await this.currentSchema.getSchema()
