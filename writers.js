@@ -38,18 +38,20 @@ module.exports = declareInjections(
       await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
         const _authorizedDocs = []
-        document.forEach(async doc => {
-          const _doc = await this.handleCreate(
-            false,
-            session,
-            type,
-            doc,
-            undefined,
-            softWrite,
-            true
-          )
-          _authorizedDocs.push(_doc)
-        })
+        await Promise.all(
+          document.map(async doc => {
+            const _doc = await this.handleCreate(
+              false,
+              session,
+              type,
+              doc,
+              undefined,
+              softWrite,
+              true
+            )
+            _authorizedDocs.push(_doc)
+          })
+        )
         const schema = await this.currentSchema.getSchema()
         let { writer } = this._getSchemaDetailsForType(schema, type)
         await writer.bulkPush()
@@ -375,19 +377,21 @@ module.exports = declareInjections(
       await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
         const _authorizedDocs = []
-        document.forEach(async doc => {
-          _authorizedDocs.push(
-            await this._update(
-              session,
-              type,
-              doc.data.id,
-              doc,
-              schema,
-              softWrite,
-              true
+        await Promise.all(
+          document.map(async doc => {
+            _authorizedDocs.push(
+              await this._update(
+                session,
+                type,
+                doc.data.id,
+                doc,
+                schema,
+                softWrite,
+                true
+              )
             )
-          )
-        })
+          })
+        )
         const _schema = await this.currentSchema.getSchema()
         let { writer } = this._getSchemaDetailsForType(_schema, type)
         await writer.bulkPush()
