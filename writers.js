@@ -1,6 +1,8 @@
 const Error = require('@cardstack/plugin-utils/error')
 const Session = require('@cardstack/plugin-utils/session')
 const log = require('@cardstack/logger')('cardstack/writers')
+const Mutex = require('async-mutex').Mutex
+const mutex = new Mutex()
 const { set, get, differenceBy, intersectionBy, partition } = require('lodash')
 const { declareInjections } = require('@cardstack/di')
 const {
@@ -238,23 +240,28 @@ module.exports = declareInjections(
           opts
         })
       } else {
-        let isSchema = this.schemaTypes.includes(type)
-        let opts = await writer.prepareCreate(
-          session,
-          type,
-          this._cleanupBodyData(schema, documentOrStream.data),
-          isSchema,
-          softWrite
-        )
-        let { originalDocument, finalDocument, finalizer, aborter } = opts
-        pending = await this.createPendingChange({
-          originalDocument,
-          finalDocument,
-          finalizer,
-          aborter,
-          schema,
-          opts
-        })
+        const release = await mutex.acquire()
+        try {
+          let isSchema = this.schemaTypes.includes(type)
+          let opts = await writer.prepareCreate(
+            session,
+            type,
+            this._cleanupBodyData(schema, documentOrStream.data),
+            isSchema,
+            softWrite
+          )
+          let { originalDocument, finalDocument, finalizer, aborter } = opts
+          pending = await this.createPendingChange({
+            originalDocument,
+            finalDocument,
+            finalizer,
+            aborter,
+            schema,
+            opts
+          })
+        } finally {
+          release()
+        }
       }
 
       let context
@@ -316,23 +323,29 @@ module.exports = declareInjections(
 
       let { writer, sourceId } = this._getSchemaDetailsForType(schema, type)
       let isSchema = this.schemaTypes.includes(type)
-      let opts = await writer.prepareUpdate(
-        session,
-        type,
-        id,
-        this._cleanupBodyData(schema, document.data),
-        isSchema,
-        softWrite
-      )
-      let { originalDocument, finalDocument, finalizer, aborter } = opts
-      let pending = await this.createPendingChange({
-        originalDocument,
-        finalDocument,
-        finalizer,
-        aborter,
-        schema,
-        opts
-      })
+      const release = await mutex.acquire()
+      let pending
+      try {
+        let opts = await writer.prepareUpdate(
+          session,
+          type,
+          id,
+          this._cleanupBodyData(schema, document.data),
+          isSchema,
+          softWrite
+        )
+        let { originalDocument, finalDocument, finalizer, aborter } = opts
+        pending = await this.createPendingChange({
+          originalDocument,
+          finalDocument,
+          finalizer,
+          aborter,
+          schema,
+          opts
+        })
+      } finally {
+        release()
+      }
 
       let context
       try {

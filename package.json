@@ -6,10 +6,7 @@
     "cardstack-generate-key": "./bin/generate-key.js",
     "cardstack-seed": "./bin/seed-models.js"
   },
-  "keywords": [
-    "cardstack-plugin",
-    "ember-addon"
-  ],
+  "keywords": ["cardstack-plugin", "ember-addon"],
   "author": "Edward Faulkner <edward@eaf4.com>",
   "repository": "https://github.com/cardstack/cardstack",
   "cardstack-plugin": {
@@ -17,6 +14,7 @@
   },
   "description": "Stock API server for the Cardstack tech stack.",
   "dependencies": {
+    "async-mutex": "0.2.4",
     "@babel/plugin-transform-modules-amd": "^7.2.0",
     "@cardstack/codegen": "0.14.24",
     "@cardstack/core-types": "0.14.24",
