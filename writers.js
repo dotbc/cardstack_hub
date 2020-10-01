@@ -342,34 +342,40 @@ module.exports = declareInjections(
           schema,
           opts
         })
+
+        let context
+        try {
+          let newSchema = await schema.validate(pending, { type, id, session })
+          schema = newSchema || schema
+
+          if (typeof beforeFinalize === 'function') {
+            await beforeFinalize()
+          }
+          context = await this._finalize(
+            pending,
+            type,
+            schema,
+            sourceId,
+            isBulk
+          )
+
+          let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
+          await batch.saveDocument(context)
+          await batch.done()
+
+          if (typeof afterFinalize === 'function') {
+            schema = await afterFinalize()
+          }
+          if (newSchema) {
+            this.currentSchema.invalidateCache()
+          }
+        } finally {
+          if (pending) {
+            await pending.abort()
+          }
+        }
       } finally {
         release()
-      }
-
-      let context
-      try {
-        let newSchema = await schema.validate(pending, { type, id, session })
-        schema = newSchema || schema
-
-        if (typeof beforeFinalize === 'function') {
-          await beforeFinalize()
-        }
-        context = await this._finalize(pending, type, schema, sourceId, isBulk)
-
-        let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
-        await batch.saveDocument(context)
-        await batch.done()
-
-        if (typeof afterFinalize === 'function') {
-          schema = await afterFinalize()
-        }
-        if (newSchema) {
-          this.currentSchema.invalidateCache()
-        }
-      } finally {
-        if (pending) {
-          await pending.abort()
-        }
       }
 
       let authorizedDocument = await context.applyReadAuthorization({ session })
