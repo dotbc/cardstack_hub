@@ -1,8 +1,6 @@
 const Error = require('@cardstack/plugin-utils/error')
 const Session = require('@cardstack/plugin-utils/session')
 const log = require('@cardstack/logger')('cardstack/writers')
-const Mutex = require('async-mutex').Mutex
-const mutex = new Mutex()
 const { set, get, differenceBy, intersectionBy, partition } = require('lodash')
 const { declareInjections } = require('@cardstack/di')
 const {
@@ -24,18 +22,18 @@ module.exports = declareInjections(
   },
 
   class Writers {
-    get schemaTypes () {
+    get schemaTypes() {
       return this.schemaLoader.ownTypes()
     }
 
     // not using DI to prevent circular dependency
-    _getCardServices () {
+    _getCardServices() {
       if (this.cardServices) {
         return this.cardServices
       }
       return (this.cardServices = this.__owner__.lookup('hub:card-services'))
     }
-    async create (session, type, document, softWrite) {
+    async create(session, type, document, softWrite) {
       log.info('creating type=%s', type)
       await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
@@ -77,7 +75,7 @@ module.exports = declareInjections(
       }
     }
 
-    async createBinary (session, type, stream) {
+    async createBinary(session, type, stream) {
       log.info('creating type=%s from binary stream', type)
       await this.pgSearchClient.ensureDatabaseSetup()
       if (!stream.read) {
@@ -89,7 +87,7 @@ module.exports = declareInjections(
       return await this.handleCreate(true, session, type, stream)
     }
 
-    async handleCardDeleteOperation (session, id) {
+    async handleCardDeleteOperation(session, id) {
       let internalCard
       try {
         internalCard = await this.searchers.get(
@@ -110,14 +108,14 @@ module.exports = declareInjections(
       return await this.handleCardOperations(session, internalCard, true)
     }
 
-    async handleCardOperations (session, card, isDeletion) {
+    async handleCardOperations(session, card, isDeletion) {
       let schema, internalCard, oldCard
       let id = card.data.id
       if (isDeletion) {
         internalCard = card
         schema = await this._loadInternalCardSchema(internalCard)
       } else {
-        ;({ schema, internalCard } = await this._loadInternalCard(card))
+        ; ({ schema, internalCard } = await this._loadInternalCard(card))
         try {
           oldCard = await this.searchers.get(
             Session.INTERNAL_PRIVILEGED,
@@ -201,7 +199,7 @@ module.exports = declareInjections(
       return { internalCard, schema, beforeFinalize, afterFinalize }
     }
 
-    async handleCreate (
+    async handleCreate(
       isBinary,
       session,
       type,
@@ -213,7 +211,7 @@ module.exports = declareInjections(
       schema = schema || (await this.currentSchema.getSchema())
       let beforeFinalize
       if (type === 'cards') {
-        ;({
+        ; ({
           schema,
           internalCard: documentOrStream,
           beforeFinalize
@@ -239,28 +237,23 @@ module.exports = declareInjections(
           opts
         })
       } else {
-        const release = await mutex.acquire()
-        try {
-          let isSchema = this.schemaTypes.includes(type)
-          let opts = await writer.prepareCreate(
-            session,
-            type,
-            this._cleanupBodyData(schema, documentOrStream.data),
-            isSchema,
-            softWrite
-          )
-          let { originalDocument, finalDocument, finalizer, aborter } = opts
-          pending = await this.createPendingChange({
-            originalDocument,
-            finalDocument,
-            finalizer,
-            aborter,
-            schema,
-            opts
-          })
-        } finally {
-          release()
-        }
+        let isSchema = this.schemaTypes.includes(type)
+        let opts = await writer.prepareCreate(
+          session,
+          type,
+          this._cleanupBodyData(schema, documentOrStream.data),
+          isSchema,
+          softWrite
+        )
+        let { originalDocument, finalDocument, finalizer, aborter } = opts
+        pending = await this.createPendingChange({
+          originalDocument,
+          finalDocument,
+          finalizer,
+          aborter,
+          schema,
+          opts
+        })
       }
 
       let context
@@ -299,7 +292,7 @@ module.exports = declareInjections(
       return authorizedDocument
     }
 
-    async _update (session, type, id, document, schema, softWrite, isBulk) {
+    async _update(session, type, id, document, schema, softWrite, isBulk) {
       log.info('updating type=%s id=%s', type, id)
       if (!document.data) {
         throw new Error('The document must have a top-level "data" property', {
@@ -311,7 +304,7 @@ module.exports = declareInjections(
       let beforeFinalize
       let afterFinalize
       if (type === 'cards') {
-        ;({
+        ; ({
           schema,
           internalCard: document,
           beforeFinalize,
@@ -322,61 +315,57 @@ module.exports = declareInjections(
 
       let { writer, sourceId } = this._getSchemaDetailsForType(schema, type)
       let isSchema = this.schemaTypes.includes(type)
-      const release = await mutex.acquire()
       let pending
+      let opts = await writer.prepareUpdate(
+        session,
+        type,
+        id,
+        this._cleanupBodyData(schema, document.data),
+        isSchema,
+        softWrite
+      )
+      let { originalDocument, finalDocument, finalizer, aborter } = opts
+      pending = await this.createPendingChange({
+        originalDocument,
+        finalDocument,
+        finalizer,
+        aborter,
+        schema,
+        opts
+      })
+
+      let context
       try {
-        let opts = await writer.prepareUpdate(
-          session,
+        let newSchema = await schema.validate(pending, { type, id, session })
+        schema = newSchema || schema
+
+        if (typeof beforeFinalize === 'function') {
+          await beforeFinalize()
+        }
+        context = await this._finalize(
+          pending,
           type,
-          id,
-          this._cleanupBodyData(schema, document.data),
-          isSchema,
-          softWrite
-        )
-        let { originalDocument, finalDocument, finalizer, aborter } = opts
-        pending = await this.createPendingChange({
-          originalDocument,
-          finalDocument,
-          finalizer,
-          aborter,
           schema,
-          opts
-        })
+          sourceId,
+          isBulk
+        )
 
-        let context
-        try {
-          let newSchema = await schema.validate(pending, { type, id, session })
-          schema = newSchema || schema
+        let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
+        await batch.saveDocument(context)
+        await batch.done()
 
-          if (typeof beforeFinalize === 'function') {
-            await beforeFinalize()
-          }
-          context = await this._finalize(
-            pending,
-            type,
-            schema,
-            sourceId,
-            isBulk
-          )
-
-          let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
-          await batch.saveDocument(context)
-          await batch.done()
-
-          if (typeof afterFinalize === 'function') {
-            schema = await afterFinalize()
-          }
-          if (newSchema) {
-            this.currentSchema.invalidateCache()
-          }
-        } finally {
-          if (pending) {
-            await pending.abort()
-          }
+        if (typeof afterFinalize === 'function') {
+          schema = await afterFinalize()
+        }
+        if (newSchema) {
+          this.currentSchema.invalidateCache()
         }
       } finally {
-        release()
+        if (pending) {
+          await pending.abort()
+        }
       }
+
 
       let authorizedDocument = await context.applyReadAuthorization({ session })
       if (isCard(authorizedDocument.data.type, authorizedDocument.data.id)) {
@@ -391,7 +380,7 @@ module.exports = declareInjections(
       return authorizedDocument
     }
 
-    async update (session, type, id, document, schema, softWrite) {
+    async update(session, type, id, document, schema, softWrite) {
       await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
         const _authorizedDocs = []
@@ -425,7 +414,7 @@ module.exports = declareInjections(
       }
     }
 
-    async delete (session, version, type, id, schema) {
+    async delete(session, version, type, id, schema) {
       log.info('deleting type=%s id=%s', type, id)
       await this.pgSearchClient.ensureDatabaseSetup()
 
@@ -434,11 +423,11 @@ module.exports = declareInjections(
       let afterFinalize
       if (type === 'cards') {
         let internalCard
-        ;({
-          schema,
-          internalCard,
-          afterFinalize
-        } = await this.handleCardDeleteOperation(session, id))
+          ; ({
+            schema,
+            internalCard,
+            afterFinalize
+          } = await this.handleCardDeleteOperation(session, id))
         if (!internalCard) {
           return
         }
@@ -486,7 +475,7 @@ module.exports = declareInjections(
       }
     }
 
-    async createPendingChange ({
+    async createPendingChange({
       originalDocument,
       finalDocument,
       finalizer,
@@ -514,7 +503,7 @@ module.exports = declareInjections(
       })
     }
 
-    async _finalize (pending, type, schema, sourceId, id, isBulk) {
+    async _finalize(pending, type, schema, sourceId, id, isBulk) {
       let meta = await pending.finalize(isBulk)
       let { finalDocumentContext } = pending
 
@@ -537,7 +526,7 @@ module.exports = declareInjections(
     // update the schema to remove those card model's content types. But the onus
     // will be on the caller to delete the primary card model--which is the signal
     // to the hub to delete the externally facing card itself.
-    async _deleteInternalCardResources (session, schema, deletedResources) {
+    async _deleteInternalCardResources(session, schema, deletedResources) {
       if (!deletedResources.length) {
         return schema
       }
@@ -602,7 +591,7 @@ module.exports = declareInjections(
       return schema
     }
 
-    async _loadInternalCard (card) {
+    async _loadInternalCard(card) {
       let internalCard = generateInternalCardFormat(
         await this.currentSchema.getSchema(),
         card
@@ -613,7 +602,7 @@ module.exports = declareInjections(
       }
     }
 
-    async _loadInternalCardSchema (internalCard) {
+    async _loadInternalCardSchema(internalCard) {
       let schema = await loadCard(
         await this.currentSchema.getSchema(),
         internalCard
@@ -627,7 +616,7 @@ module.exports = declareInjections(
       )
     }
 
-    _getSchemaDetailsForType (schema, type) {
+    _getSchemaDetailsForType(schema, type) {
       let contentType = schema.getType(type)
       if (
         !contentType ||
@@ -641,8 +630,8 @@ module.exports = declareInjections(
           Boolean(contentType && contentType.dataSource),
           Boolean(
             contentType &&
-              contentType.dataSource &&
-              contentType.dataSource.writer
+            contentType.dataSource &&
+            contentType.dataSource.writer
           )
         )
 
@@ -657,12 +646,12 @@ module.exports = declareInjections(
       return { writer, sourceId }
     }
 
-    _cleanupBodyData (schema, data) {
+    _cleanupBodyData(schema, data) {
       let doc = schema.withOnlyRealFields(data) // remove computed fields
       return this._createQueryLinks(doc) // convert `cardstack-queries` relationships to links.related
     }
 
-    _createQueryLinks (doc) {
+    _createQueryLinks(doc) {
       if (!doc.relationships) {
         return doc
       }
@@ -700,7 +689,7 @@ module.exports = declareInjections(
 )
 
 class PendingChange {
-  constructor ({
+  constructor({
     originalDocument,
     finalDocument,
     finalizer,
@@ -751,7 +740,7 @@ class PendingChange {
     }
   }
 
-  async finalize (isBulk) {
+  async finalize(isBulk) {
     let finalizer = this._finalizer
     this._finalizer = null
     this._aborter = null
@@ -761,7 +750,7 @@ class PendingChange {
     }
   }
 
-  async abort () {
+  async abort() {
     let aborter = this._aborter
     this._finalizer = null
     this._aborter = null
@@ -773,7 +762,7 @@ class PendingChange {
 
 // TODO Probably a better idea would be to refactor JSONAPIFactory to outside of test-support
 // and then use that to get the resources ordered by dependency in order to safely delete.
-function sortSchemaForDelete ({ type: typeA }, { type: typeB }) {
+function sortSchemaForDelete({ type: typeA }, { type: typeB }) {
   if (typeA === 'computed-fields') {
     typeA = 'fields'
   }
