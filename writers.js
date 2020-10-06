@@ -33,7 +33,7 @@ module.exports = declareInjections(
       }
       return (this.cardServices = this.__owner__.lookup('hub:card-services'))
     }
-    async create(session, type, document, softWrite) {
+    async create(session, type, document) {
       log.info('creating type=%s', type)
       await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
@@ -44,16 +44,10 @@ module.exports = declareInjections(
             false,
             session,
             type,
-            doc,
-            undefined,
-            softWrite,
-            true
+            doc
           )
           _authorizedDocs.push(_doc)
         }
-        const schema = await this.currentSchema.getSchema()
-        let { writer } = this._getSchemaDetailsForType(schema, type)
-        await writer.bulkPush()
         return _authorizedDocs
       } else {
         if (!document.data) {
@@ -68,9 +62,7 @@ module.exports = declareInjections(
           false,
           session,
           type,
-          document,
-          undefined,
-          softWrite
+          document
         )
       }
     }
@@ -204,9 +196,7 @@ module.exports = declareInjections(
       session,
       type,
       documentOrStream,
-      schema,
-      softWrite,
-      isBulk
+      schema
     ) {
       schema = schema || (await this.currentSchema.getSchema())
       let beforeFinalize
@@ -242,8 +232,7 @@ module.exports = declareInjections(
           session,
           type,
           this._cleanupBodyData(schema, documentOrStream.data),
-          isSchema,
-          softWrite
+          isSchema
         )
         let { originalDocument, finalDocument, finalizer, aborter } = opts
         pending = await this.createPendingChange({
@@ -264,7 +253,7 @@ module.exports = declareInjections(
         if (typeof beforeFinalize === 'function') {
           await beforeFinalize()
         }
-        context = await this._finalize(pending, type, schema, sourceId, isBulk)
+        context = await this._finalize(pending, type, schema, sourceId)
 
         let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
         await batch.saveDocument(context)
@@ -292,7 +281,7 @@ module.exports = declareInjections(
       return authorizedDocument
     }
 
-    async _update(session, type, id, document, schema, softWrite, isBulk) {
+    async _update(session, type, id, document, schema) {
       log.info('updating type=%s id=%s', type, id)
       if (!document.data) {
         throw new Error('The document must have a top-level "data" property', {
@@ -321,8 +310,7 @@ module.exports = declareInjections(
         type,
         id,
         this._cleanupBodyData(schema, document.data),
-        isSchema,
-        softWrite
+        isSchema
       )
       let { originalDocument, finalDocument, finalizer, aborter } = opts
       pending = await this.createPendingChange({
@@ -346,8 +334,7 @@ module.exports = declareInjections(
           pending,
           type,
           schema,
-          sourceId,
-          isBulk
+          sourceId
         )
 
         let batch = this.pgSearchClient.beginBatch(schema, this.searchers)
@@ -380,7 +367,7 @@ module.exports = declareInjections(
       return authorizedDocument
     }
 
-    async update(session, type, id, document, schema, softWrite) {
+    async update(session, type, id, document, schema) {
       await this.pgSearchClient.ensureDatabaseSetup()
       if (Array.isArray(document)) {
         const _authorizedDocs = []
@@ -392,15 +379,10 @@ module.exports = declareInjections(
               type,
               doc.data.id,
               doc,
-              schema,
-              softWrite,
-              true
+              schema
             )
           )
         }
-        const _schema = await this.currentSchema.getSchema()
-        let { writer } = this._getSchemaDetailsForType(_schema, type)
-        await writer.bulkPush()
         return _authorizedDocs
       } else {
         return await this._update(
@@ -408,8 +390,7 @@ module.exports = declareInjections(
           type,
           id,
           document,
-          schema,
-          softWrite
+          schema
         )
       }
     }
